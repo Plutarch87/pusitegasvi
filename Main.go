@@ -51,7 +51,7 @@ func main() {
 	// Start loop to check for price breakouts
 	for {
 		// Get current klines
-		klines, err := client.NewKlinesService().Symbol(symbol).Interval("1m").Do(context.Background())
+		klines, err := client.NewKlinesService().Symbol(symbol).Interval("1m").Limit(20).Do(context.Background())
 		if err != nil {
 			fmt.Println(err)
 			continue
@@ -59,10 +59,8 @@ func main() {
 		// Calculate current price and 20-period moving average
 		var currentPrice float64
 		var ma20 float64
-		for i, kline := range klines {
-			if i > 20 {
-				continue
-			}
+
+		for _, kline := range klines {
 			float := kline.Close
 			currentPrice, err := strconv.ParseFloat(float, 64)
 			if err != nil {
@@ -75,13 +73,11 @@ func main() {
 		}
 
 		ma20 = (ma20 / 20)
-
 		fmt.Printf("Current MA20: %v\n", ma20)
 
-		result := big.NewFloat(currentPrice).Cmp(big.NewFloat(ma20))
-
 		// Check for buy signal (price breaks above 20-period MA)
-		if result > 0 && buyOrder == nil {
+		if currentPrice > ma20 && buyOrder == nil {
+			fmt.Println("Buy?")
 			// Place a market order to buy at current price
 			order, err := client.NewCreateOrderService().
 				Symbol(symbol).
@@ -98,7 +94,7 @@ func main() {
 		}
 
 		// Check for sell signal (price breaks below 20-period MA)
-		if result < 0 && buyOrder != nil && sellOrder == nil {
+		if currentPrice < ma20 && buyOrder != nil && sellOrder == nil {
 			fmt.Println("if lesser")
 
 			// Place a limit order to sell at current price
