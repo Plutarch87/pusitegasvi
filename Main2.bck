@@ -1,0 +1,141 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strconv"
+	"time"
+
+	"github.com/joho/godotenv"
+
+	"github.com/adshao/go-binance/v2"
+)
+
+const (
+	symbol = "BTCUSDT"
+)
+
+func main() {
+	envErr := godotenv.Load(".env")
+	if envErr != nil {
+		fmt.Println("Could not load .env file")
+	}
+
+	apiKey, exists := os.LookupEnv("BINANCE_API_KEY")
+	if !exists {
+		fmt.Println("API key doesn't exist")
+		os.Exit(1)
+	}
+	secretKey, exists := os.LookupEnv("BINANCE_SECRET_KEY")
+	if !exists {
+		fmt.Println("API secret doesn't exist")
+		os.Exit(1)
+	}
+	// Enable use of TestNet
+	binance.UseTestnet = false
+
+	// Initialize Binance client
+	client := binance.NewClient(apiKey, secretKey)
+
+	// Get account information
+	account, err := client.NewGetAccountService().Do(context.Background())
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	// Initialize order parameters
+	var buyOrder *binance.CreateOrderResponse
+	var sellOrder *binance.CreateOrderResponse
+
+	// Wait for first candle to close
+	// time.Sleep(60 * time.Minute)
+
+	// Start loop to check for price breakouts
+	for {
+
+		// Find available balance for the asset being traded
+		var assetBalance float64
+		for _, balance := range account.Balances {
+			if balance.Asset == "BTC" {
+				fmt.Printf("Free: %v\n", balance.Free)
+				fmt.Printf("Asset: %v\n", balance.Asset)
+				fmt.Printf("Locked: %v\n", balance.Locked)
+				assetBalance, _ = strconv.ParseFloat(balance.Free, 64)
+				break
+			}
+		}
+
+		// Get current klines
+		klines, err := client.NewKlinesService().Symbol(symbol).Interval("1m").Limit(20).Do(context.Background())
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+		// Calculate current price and 20-period moving average
+		var currentPrice float64
+		var ma20 float64
+		for _, kline := range klines {
+			float := kline.Close
+			currentPrice, err = strconv.ParseFloat(float, 64)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+			fmt.Printf("Current price: %s\n", float)
+			ma20 += currentPrice
+		}
+
+		// Calculate quantity based on available balance and desired allocation percentage
+		allocationPercentage := 1.0 // allocate 50% of available balance to this trade
+		quantity := (assetBalance * allocationPercentage) / currentPrice
+
+		fmt.Printf("Asset balance: %v\n", assetBalance)
+		fmt.Printf("Quantity: %v\n", quantity)
+		os.Exit(1)
+
+		ma20 = (ma20 / 20)
+		fmt.Printf("Current MA20: %v\n", ma20)
+		os.Exit(1)
+		// Check for buy signal (price breaks above 20-period MA)
+		if currentPrice > ma20 && buyOrder == nil {
+			fmt.Println("Buy?")
+			// Place a market order to buy at current price
+			order, err := client.NewCreateOrderService().
+				Symbol(symbol).
+				Side(binance.SideTypeBuy).
+				Type(binance.OrderTypeMarket).
+				Quantity(fmt.Sprintf("%.8f", quantity)).
+				Do(context.Background())
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+			buyOrder = order
+			sellOrder = nil
+			fmt.Printf("Buy order placed: %v\n", order)
+		}
+
+		// Check for sell signal (price breaks below 20-period MA)
+		if currentPrice < ma20 && buyOrder != nil && sellOrder == nil {
+			// Place a limit order to sell at current price
+			order, err := client.NewCreateOrderService().
+				Symbol(symbol).
+				Side(binance.SideTypeSell).
+				Type(binance.OrderTypeMarket).
+				Quantity(fmt.Sprintf("%.8f", quantity)).
+				Do(context.Background())
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+			sellOrder = order
+			buyOrder = nil
+			fmt.Printf("Sell order placed: %v\n", order)
+		}
+
+		// Wait for next minute
+		time.Sleep(60 * time.Minute)
+	}
+}

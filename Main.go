@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/big"
 	"os"
 	"strconv"
@@ -14,8 +15,7 @@ import (
 )
 
 const (
-	symbol   = "BTCUSDT"
-	quantity = 0.001
+	symbol = "ETHUSDT"
 )
 
 func main() {
@@ -40,44 +40,82 @@ func main() {
 	// Initialize Binance client
 	client := binance.NewClient(apiKey, secretKey)
 
+	// Get account information
+	account, err := client.NewGetAccountService().Do(context.Background())
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
 	// Initialize order parameters
 	var buyOrder *binance.CreateOrderResponse
 	var sellOrder *binance.CreateOrderResponse
 	var stopLossOrder *binance.CreateOrderResponse
 
 	// Wait for first candle to close
-	time.Sleep(60 * time.Second)
+	// time.Sleep(60 * time.Second)
 
 	// Start loop to check for price breakouts
 	for {
+
+		// Find available balance for the asset being traded
+		var quantity string
+
+		for _, balance := range account.Balances {
+			quantity = "0.0"
+			if balance.Asset == "ETH" && sellOrder == nil {
+				ethFloat, err := strconv.ParseFloat(balance.Free, 64)
+				if err != nil {
+					fmt.Printf("Error: %v\n", err)
+				}
+
+				if ethFloat > 0.01 {
+					quantity = balance.Free
+					break
+				}
+			}
+
+			if balance.Asset == "USDT" && buyOrder == nil {
+				usdtFloat, err := strconv.ParseFloat(balance.Free, 64)
+				if err != nil {
+					fmt.Printf("Error: %v\n", err)
+				}
+
+				if usdtFloat > 1 {
+					quantity = balance.Free
+					break
+				}
+			}
+		}
+
+		var currentPrice float64
+		var buyPrice float64
+
 		// Get current klines
-		klines, err := client.NewKlinesService().Symbol(symbol).Interval("1m").Limit(20).Do(context.Background())
+		klines, err := client.NewKlinesService().Symbol(symbol).Interval("1m").Limit(1).Do(context.Background())
 		if err != nil {
 			fmt.Println(err)
 			continue
 		}
-		// Calculate current price and 20-period moving average
-		var currentPrice float64
-		var ma20 float64
 
 		for _, kline := range klines {
 			float := kline.Close
-			currentPrice, err := strconv.ParseFloat(float, 64)
+			currentPrice, err = strconv.ParseFloat(float, 64)
 			if err != nil {
 				fmt.Println(err)
 				continue
 			}
-			fmt.Printf("Current price: %s\n", float)
-
-			ma20 += currentPrice
+			fmt.Printf("Current Price: %s\n", float)
 		}
 
-		ma20 = (ma20 / 20)
-		fmt.Printf("Current MA20: %v\n", ma20)
+		lastDigit := int(math.Round(currentPrice)) % 10
 
-		// Check for buy signal (price breaks above 20-period MA)
-		if currentPrice > ma20 && buyOrder == nil {
-			fmt.Println("Buy?")
+		fmt.Printf("Current Price: %v\n", currentPrice)
+		fmt.Printf("Quantity: %v\n", quantity)
+		fmt.Printf("Last Digit: %v\n", lastDigit)
+
+		if lastDigit == 1 && buyOrder == nil {
+
 			// Place a market order to buy at current price
 			order, err := client.NewCreateOrderService().
 				Symbol(symbol).
@@ -90,26 +128,31 @@ func main() {
 				continue
 			}
 			buyOrder = order
+			sellOrder = nil
+			buyPrice = currentPrice
+
 			fmt.Printf("Buy order placed: %v\n", order)
 		}
 
 		// Check for sell signal (price breaks below 20-period MA)
-		if currentPrice < ma20 && buyOrder != nil && sellOrder == nil {
-			fmt.Println("if lesser")
+		if lastDigit == 8 && sellOrder == nil && buyPrice < currentPrice {
+			if currentPrice > buyPrice {
+				// Place a limit order to sell at current price
+				order, err := client.NewCreateOrderService().
+					Symbol(symbol).
+					Side(binance.SideTypeSell).
+					Type(binance.OrderTypeMarket).
+					Quantity(fmt.Sprintf("%.8f", quantity)).
+					Do(context.Background())
+				if err != nil {
+					fmt.Println(err)
+					continue
+				}
 
-			// Place a limit order to sell at current price
-			order, err := client.NewCreateOrderService().
-				Symbol(symbol).
-				Side(binance.SideTypeSell).
-				Type(binance.OrderTypeMarket).
-				Quantity(fmt.Sprintf("%.8f", quantity)).
-				Do(context.Background())
-			if err != nil {
-				fmt.Println(err)
-				continue
+				sellOrder = order
+				buyOrder = nil
+				fmt.Printf("Sell order placed: %v\n", order)
 			}
-			sellOrder = order
-			fmt.Printf("Sell order placed: %v\n", order)
 		}
 
 		// Check for stop loss (price falls below 5% of buy price)
