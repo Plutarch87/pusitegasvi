@@ -58,36 +58,6 @@ func main() {
 	// Start loop to check for price breakouts
 	for {
 
-		// Find available balance for the asset being traded
-		var quantity string
-
-		for _, balance := range account.Balances {
-			quantity = "0.0"
-			if balance.Asset == "ETH" && sellOrder == nil {
-				ethFloat, err := strconv.ParseFloat(balance.Free, 64)
-				if err != nil {
-					fmt.Printf("Error: %v\n", err)
-				}
-
-				if ethFloat > 0.01 {
-					quantity = balance.Free
-					break
-				}
-			}
-
-			if balance.Asset == "USDT" && buyOrder == nil {
-				usdtFloat, err := strconv.ParseFloat(balance.Free, 64)
-				if err != nil {
-					fmt.Printf("Error: %v\n", err)
-				}
-
-				if usdtFloat > 1 {
-					quantity = balance.Free
-					break
-				}
-			}
-		}
-
 		var currentPrice float64
 		var buyPrice float64
 
@@ -108,20 +78,57 @@ func main() {
 			fmt.Printf("Current Price: %s\n", float)
 		}
 
+		var quantity string
+		var buyQty float64
+		var rounded float64
+
+		// Find available balance for the asset being traded
+		for _, balance := range account.Balances {
+			quantity = "0.0"
+			if balance.Asset == "ETH" && sellOrder == nil {
+				ethFloat, err := strconv.ParseFloat(balance.Free, 64)
+				if err != nil {
+					fmt.Printf("Error: %v\n", err)
+				}
+
+				if ethFloat > 0.01 {
+					quantity = balance.Free
+					break
+				}
+			}
+
+			if balance.Asset == "USDT" && buyOrder == nil {
+				usdtFloat, err := strconv.ParseFloat(balance.Free, 64)
+				if err != nil {
+					fmt.Printf("Error: %v\n", err)
+				}
+
+				buyQty = usdtFloat / currentPrice
+				rounded = math.Round(buyQty*100) / 100
+
+				if usdtFloat > 1 {
+					quantity = balance.Free
+					break
+				}
+			}
+		}
+
 		lastDigit := int(math.Round(currentPrice)) % 10
 
 		fmt.Printf("Current Price: %v\n", currentPrice)
 		fmt.Printf("Quantity: %v\n", quantity)
 		fmt.Printf("Last Digit: %v\n", lastDigit)
+		fmt.Printf("Rounded Buy Quantity: %v\n", rounded)
 
 		if lastDigit == 1 && buyOrder == nil {
+			fmt.Printf("Buy order\n")
 
 			// Place a market order to buy at current price
 			order, err := client.NewCreateOrderService().
 				Symbol(symbol).
 				Side(binance.SideTypeBuy).
 				Type(binance.OrderTypeMarket).
-				Quantity(fmt.Sprintf("%.8f", quantity)).
+				Quantity(fmt.Sprintf("%.8f", rounded)).
 				Do(context.Background())
 			if err != nil {
 				fmt.Println(err)
@@ -134,8 +141,7 @@ func main() {
 			fmt.Printf("Buy order placed: %v\n", order)
 		}
 
-		// Check for sell signal (price breaks below 20-period MA)
-		if lastDigit == 8 && sellOrder == nil && buyPrice < currentPrice {
+		if lastDigit == 9 && sellOrder == nil && buyPrice < currentPrice {
 			if currentPrice > buyPrice {
 				// Place a limit order to sell at current price
 				order, err := client.NewCreateOrderService().
