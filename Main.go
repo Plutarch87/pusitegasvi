@@ -81,32 +81,51 @@ func main() {
 		var quantity string
 		var buyQty float64
 		var rounded float64
+		var buyFirst bool
 
 		// Find available balance for the asset being traded
 		for _, balance := range account.Balances {
-			quantity = "0.0"
-			if balance.Asset == "ETH" && sellOrder == nil {
+			if balance.Asset == "USDT" {
+
+				fmt.Printf("USDT Balance: %v\n", balance.Free)
+
+				usdtFloat, err := strconv.ParseFloat(balance.Free, 64)
+				if err != nil {
+					fmt.Printf("Error: %v\n", err)
+				}
+
+				if usdtFloat > 1 {
+					buyFirst = true
+					feePercentage := 1.00
+					fee := usdtFloat * (feePercentage / 100)
+					buyQty = (usdtFloat - fee) / currentPrice
+					rounded = math.Round(buyQty*10000) / 10000
+					quantity = balance.Free
+					break
+				} else {
+					continue
+				}
+			}
+
+			if balance.Asset == "ETH" {
+				fmt.Printf("ETH Balance: %v\n", balance.Free)
+
 				ethFloat, err := strconv.ParseFloat(balance.Free, 64)
 				if err != nil {
 					fmt.Printf("Error: %v\n", err)
 				}
 
 				if ethFloat > 0.01 {
-					quantity = balance.Free
-					break
-				}
-			}
-
-			if balance.Asset == "USDT" && buyOrder == nil {
-				usdtFloat, err := strconv.ParseFloat(balance.Free, 64)
-				if err != nil {
-					fmt.Printf("Error: %v\n", err)
-				}
-
-				buyQty = usdtFloat / currentPrice
-				rounded = math.Round(buyQty*100) / 100
-
-				if usdtFloat > 1 {
+					buyFirst = false
+					buyPrice, err = getBuyPrice(*client)
+					if err != nil {
+						fmt.Println(err)
+						continue
+					}
+					sellOrder = nil
+					feePercentage := 1.00
+					fee := ethFloat * (feePercentage / 100)
+					rounded = math.Round((ethFloat-fee)*10000) / 10000
 					quantity = balance.Free
 					break
 				}
@@ -119,8 +138,10 @@ func main() {
 		fmt.Printf("Quantity: %v\n", quantity)
 		fmt.Printf("Last Digit: %v\n", lastDigit)
 		fmt.Printf("Rounded Buy Quantity: %v\n", rounded)
+		fmt.Printf("Last Buy Price: %v\n", buyPrice)
+		fmt.Printf("Last Buy Qty: %v\n", buyQty)
 
-		if lastDigit == 1 && buyOrder == nil {
+		if (lastDigit == 1 || lastDigit == 2) && buyOrder == nil && buyFirst {
 			fmt.Printf("Buy order\n")
 
 			// Place a market order to buy at current price
@@ -132,6 +153,7 @@ func main() {
 				Do(context.Background())
 			if err != nil {
 				fmt.Println(err)
+				time.Sleep(60 * time.Second)
 				continue
 			}
 			buyOrder = order
@@ -141,24 +163,24 @@ func main() {
 			fmt.Printf("Buy order placed: %v\n", order)
 		}
 
-		if lastDigit == 9 && sellOrder == nil && buyPrice < currentPrice {
-			if currentPrice > buyPrice {
-				// Place a limit order to sell at current price
-				order, err := client.NewCreateOrderService().
-					Symbol(symbol).
-					Side(binance.SideTypeSell).
-					Type(binance.OrderTypeMarket).
-					Quantity(fmt.Sprintf("%.8f", quantity)).
-					Do(context.Background())
-				if err != nil {
-					fmt.Println(err)
-					continue
-				}
+		if (lastDigit == 8 || lastDigit == 9) && sellOrder == nil && buyPrice < currentPrice {
 
-				sellOrder = order
-				buyOrder = nil
-				fmt.Printf("Sell order placed: %v\n", order)
+			// Place a limit order to sell at current price
+			order, err := client.NewCreateOrderService().
+				Symbol(symbol).
+				Side(binance.SideTypeSell).
+				Type(binance.OrderTypeMarket).
+				Quantity(fmt.Sprint(rounded)).
+				Do(context.Background())
+			if err != nil {
+				fmt.Println(err)
+				time.Sleep(60 * time.Second)
+				continue
 			}
+
+			sellOrder = order
+			buyOrder = nil
+			fmt.Printf("Sell order placed: %v\n", order)
 		}
 
 		// Check for stop loss (price falls below 5% of buy price)
@@ -177,7 +199,7 @@ func main() {
 					Symbol(symbol).
 					Side(binance.SideTypeSell).
 					Type(binance.OrderTypeStopLoss).
-					Quantity(fmt.Sprintf("%.8f", quantity)).
+					Quantity(fmt.Sprint(rounded)).
 					Do(context.Background())
 				if err != nil {
 					fmt.Println(err)
@@ -188,7 +210,26 @@ func main() {
 			}
 		}
 
+		fmt.Println("--------")
 		// Wait for next minute
 		time.Sleep(60 * time.Second)
 	}
+}
+
+func getBuyPrice(c binance.Client) (float64, error) {
+	// Fetch the order book for the symbol
+	depth, err := c.NewDepthService().Symbol(symbol).Do(context.Background())
+	if err != nil {
+		fmt.Println("Error:", err)
+		return 0.00, err
+	}
+
+	lastOrderPrice, err := strconv.ParseFloat(depth.Bids[0].Price, 64)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return 0.00, err
+	}
+
+	// Retrieve the last buy order price from the order book
+	return lastOrderPrice, nil
 }
